@@ -34,39 +34,45 @@ app.get('/scrape-fff', async (req, res) => {
     );
 
     await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+
+    // Attendre le chargement des éléments de match dans le DOM
+    await page.waitForSelector('a[href*="/competition/"]', { timeout: 10000 }).catch(() => null);
+
     const html = await page.content();
     await browser.close();
 
-    // Parsing du HTML avec Cheerio
     const $ = cheerio.load(html);
     const matches = [];
 
-    $('.match-link, .ping-match-card, .match-result').each((_, element) => {
-      const match = $(element);
-      
-      const homeTeam = match.find('.home-team, .equipe-domicile, .team-name').first().text().trim();
-      const awayTeam = match.find('.away-team, .equipe-exterieur, .team-name').last().text().trim();
-      const score = match.find('.score, .match-score').text().trim();
-      const date = match.find('.date, .match-date').text().trim();
-      const homeLogo = match.find('img').first().attr('src') || '';
-      const awayLogo = match.find('img').last().attr('src') || '';
+    // Recherche de tous les liens ou blocs contenant des informations de matchs
+    $('a[href*="/competition/res_match"], .match-card, .ping-match-card, div[class*="match"]').each((_, element) => {
+      const el = $(element);
 
-      if (homeTeam || awayTeam) {
+      const textContent = el.text().replace(/\s+/g, ' ').trim();
+      
+      // Extraction des liens et images
+      const homeLogo = el.find('img').first().attr('src') || '';
+      const awayLogo = el.find('img').last().attr('src') || '';
+      const matchLink = el.attr('href') || '';
+
+      if (textContent.length > 5 && (textContent.includes('-') || textContent.includes(':'))) {
         matches.push({
-          homeTeam,
-          awayTeam,
-          score,
-          date,
+          rawText: textContent,
           homeLogo,
-          awayLogo
+          awayLogo,
+          link: matchLink.startsWith('http') ? matchLink : `https://www.fff.fr${matchLink}`
         });
       }
     });
 
+    // Sécuriser les doublons
+    const uniqueMatches = Array.from(new Set(matches.map(m => m.rawText)))
+      .map(rawText => matches.find(m => m.rawText === rawText));
+
     return res.status(200).json({
       success: true,
-      total: matches.length,
-      data: matches
+      total: uniqueMatches.length,
+      data: uniqueMatches
     });
 
   } catch (error) {
@@ -79,3 +85,4 @@ app.get('/scrape-fff', async (req, res) => {
 app.listen(PORT, () => {
   console.log(`Scraper Puppeteer + Cheerio démarré sur le port ${PORT}`);
 });
+
