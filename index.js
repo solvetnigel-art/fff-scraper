@@ -34,56 +34,57 @@ app.get('/scrape-fff', async (req, res) => {
     );
 
     await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+
+    // Attendre que la page charge au moins un lien de compétition/match
+    await page.waitForSelector('a[href*="/competition/"]', { timeout: 10000 }).catch(() => null);
+
     const html = await page.content();
     await browser.close();
 
     const $ = cheerio.load(html);
     const matches = [];
 
-    // Cibler directement les cartes/lignes de matchs dans le calendrier
-    $('.ping-match-card, .match-card, .match, [class*="match-row"]').each((_, element) => {
+    // On cible tous les conteneurs ou liens vers un match FFF
+    $('a[href*="/competition/res_match"], a[href*="/match/"], .ping-match-card, div[class*="match-card"]').each((_, element) => {
       const el = $(element);
 
-      const date = el.find('.date, .match-date, [class*="date"]').first().text().trim();
-      const competition = el.find('.competition, .match-comp, [class*="comp"]').first().text().trim();
-      const homeTeam = el.find('.equipe-dom, .home-team, [class*="home"]').first().text().trim();
-      const awayTeam = el.find('.equipe-ext, .away-team, [class*="away"]').first().text().trim();
-      const score = el.find('.score, .match-score, [class*="score"]').first().text().trim();
+      // Récupérer les images (logos des clubs)
+      const imgs = el.find('img').map((_, img) => $(img).attr('src')).get();
+      const homeLogo = imgs[0] || '';
+      const awayLogo = imgs[1] || '';
 
-      const homeLogo = el.find('img').first().attr('src') || '';
-      const awayLogo = el.find('img').last().attr('src') || '';
+      const matchLink = el.attr('href') || '';
+      const fullText = el.text().replace(/\s+/g, ' ').trim();
 
-      if (date || homeTeam || awayTeam) {
-        matches.push({
-          date,
-          competition,
-          homeTeam,
-          score,
-          awayTeam,
-          homeLogo,
-          awayLogo
-        });
-      }
+      // Extraction propre par regex si tout est concaténé dans le texte
+      // Exemple de texte FFF : "sam 05 sep 2026 - 13h00 Fém U13 D2 Alsace SELESTAT S.C 3 1 CANTON VERT A.S."
+      const dateMatch = fullText.match(/(sam|dim|lun|mar|mer|jeu|ven)\s+\d{2}\s+[a-z]{3}\s+\d{4}\s*-\s*\d{2}h\d{2}/i);
+      const date = dateMatch ? dateMatch[0] : '';
+
+      matches.push({
+        date,
+        rawText: fullText,
+        homeLogo,
+        awayLogo,
+        link: matchLink.startsWith('http') ? matchLink : `https://www.fff.fr${matchLink}`
+      });
     });
 
-    // Si le conteneur spécifique n'a pas séparé les blocs, analyser le conteneur principal
-    if (matches.length === 0) {
-      $('a[href*="/competition/res_match"]').each((_, element) => {
-        const el = $(element);
-        const text = el.text().replace(/\s+/g, ' ').trim();
-        const link = el.attr('href') || '';
+    // Nettoyage des doublons basés sur le texte brut
+    const uniqueMatches = [];
+    const seenText = new Set();
 
-        matches.push({
-          rawMatch: text,
-          link: link.startsWith('http') ? link : `https://www.fff.fr${link}`
-        });
-      });
+    for (const match of matches) {
+      if (match.rawText && !seenText.has(match.rawText)) {
+        seenText.add(match.rawText);
+        uniqueMatches.push(match);
+      }
     }
 
     return res.status(200).json({
       success: true,
-      total: matches.length,
-      data: matches
+      total: uniqueMatches.length,
+      data: uniqueMatches
     });
 
   } catch (error) {
@@ -96,4 +97,5 @@ app.get('/scrape-fff', async (req, res) => {
 app.listen(PORT, () => {
   console.log(`Scraper Puppeteer + Cheerio démarré sur le port ${PORT}`);
 });
+
 
