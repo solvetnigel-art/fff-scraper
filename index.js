@@ -34,45 +34,56 @@ app.get('/scrape-fff', async (req, res) => {
     );
 
     await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
-
-    // Attendre le chargement des éléments de match dans le DOM
-    await page.waitForSelector('a[href*="/competition/"]', { timeout: 10000 }).catch(() => null);
-
     const html = await page.content();
     await browser.close();
 
     const $ = cheerio.load(html);
     const matches = [];
 
-    // Recherche de tous les liens ou blocs contenant des informations de matchs
-    $('a[href*="/competition/res_match"], .match-card, .ping-match-card, div[class*="match"]').each((_, element) => {
+    // Cibler directement les cartes/lignes de matchs dans le calendrier
+    $('.ping-match-card, .match-card, .match, [class*="match-row"]').each((_, element) => {
       const el = $(element);
 
-      const textContent = el.text().replace(/\s+/g, ' ').trim();
-      
-      // Extraction des liens et images
+      const date = el.find('.date, .match-date, [class*="date"]').first().text().trim();
+      const competition = el.find('.competition, .match-comp, [class*="comp"]').first().text().trim();
+      const homeTeam = el.find('.equipe-dom, .home-team, [class*="home"]').first().text().trim();
+      const awayTeam = el.find('.equipe-ext, .away-team, [class*="away"]').first().text().trim();
+      const score = el.find('.score, .match-score, [class*="score"]').first().text().trim();
+
       const homeLogo = el.find('img').first().attr('src') || '';
       const awayLogo = el.find('img').last().attr('src') || '';
-      const matchLink = el.attr('href') || '';
 
-      if (textContent.length > 5 && (textContent.includes('-') || textContent.includes(':'))) {
+      if (date || homeTeam || awayTeam) {
         matches.push({
-          rawText: textContent,
+          date,
+          competition,
+          homeTeam,
+          score,
+          awayTeam,
           homeLogo,
-          awayLogo,
-          link: matchLink.startsWith('http') ? matchLink : `https://www.fff.fr${matchLink}`
+          awayLogo
         });
       }
     });
 
-    // Sécuriser les doublons
-    const uniqueMatches = Array.from(new Set(matches.map(m => m.rawText)))
-      .map(rawText => matches.find(m => m.rawText === rawText));
+    // Si le conteneur spécifique n'a pas séparé les blocs, analyser le conteneur principal
+    if (matches.length === 0) {
+      $('a[href*="/competition/res_match"]').each((_, element) => {
+        const el = $(element);
+        const text = el.text().replace(/\s+/g, ' ').trim();
+        const link = el.attr('href') || '';
+
+        matches.push({
+          rawMatch: text,
+          link: link.startsWith('http') ? link : `https://www.fff.fr${link}`
+        });
+      });
+    }
 
     return res.status(200).json({
       success: true,
-      total: uniqueMatches.length,
-      data: uniqueMatches
+      total: matches.length,
+      data: matches
     });
 
   } catch (error) {
