@@ -39,20 +39,40 @@ app.get('/scrape-fff', async (req, res) => {
 
     const $ = cheerio.load(html);
     const matches = [];
+    const teams = [];
 
+    // 1. Extraire la liste des équipes du club (colonne de droite sur le site FFF)
+    $('a[href*="/equipe/"]').each((_, element) => {
+      const el = $(element);
+      const teamName = el.text().trim();
+      const link = el.attr('href') || '';
+      const logo = el.find('img').attr('src') || '';
+
+      if (teamName && link) {
+        teams.push({
+          name: teamName,
+          logo: logo.startsWith('http') ? logo : `https://www.fff.fr${logo}`,
+          url: link.startsWith('http') ? link : `https://www.fff.fr${link}`
+        });
+      }
+    });
+
+    // Dédupliquer les équipes
+    const uniqueTeams = Array.from(new Set(teams.map(t => t.url)))
+      .map(url => teams.find(t => t.url === url));
+
+    // 2. Extraire la liste des matchs présentés sur la page
     $('a[href*="/competition/match/"]').each((_, element) => {
       const el = $(element);
       const link = el.attr('href') || '';
       const rawText = el.text().trim();
-
       const fullLink = link.startsWith('http') ? link : `https://www.fff.fr${link}`;
 
-      // Extraction des noms d'équipes depuis le slug
       const matchSlug = link.split('/match/')[1] || '';
       const slugParts = matchSlug.replace(/^\d+-/, '').split('-');
 
-      let homeTeam = 'Inconnu';
-      let awayTeam = 'Inconnu';
+      let homeTeam = 'INCONNU';
+      let awayTeam = 'INCONNU';
 
       if (slugParts.length >= 2) {
         const mid = Math.floor(slugParts.length / 2);
@@ -60,21 +80,6 @@ app.get('/scrape-fff', async (req, res) => {
         awayTeam = slugParts.slice(mid).join(' ').toUpperCase();
       }
 
-      // Extraction des logos dans l'élément ou ses parents
-      const parentCard = el.closest('div, li, article, tr');
-      const imgs = parentCard.find('img').map((_, img) => $(img).attr('src')).get();
-
-      // Formater URLs de logos (ajouter le domaine si relatif)
-      const formatLogo = (src) => {
-        if (!src) return '';
-        if (src.startsWith('http')) return src;
-        return `https://www.fff.fr${src}`;
-      };
-
-      const homeLogo = formatLogo(imgs[0]);
-      const awayLogo = formatLogo(imgs[1]);
-
-      // Score ou Heure
       let scoreOrTime = rawText;
       let status = 'À VENIR';
 
@@ -83,12 +88,13 @@ app.get('/scrape-fff', async (req, res) => {
         status = 'TERMINÉ';
       } else if (rawText.includes(':') || rawText.includes('h')) {
         status = 'À VENIR';
-      } else if (rawText.includes('-')) {
-        status = 'TERMINÉ';
       }
 
-      // Extraction de la compétition si présente à proximité
-      const competition = parentCard.find('[class*="comp"], [class*="category"], .competition').text().trim() || 'Compétition Officielle';
+      const parentBlock = el.closest('div, tr, li, article');
+      const localImgs = parentBlock.find('img').map((_, img) => $(img).attr('src')).get();
+
+      const homeLogo = localImgs[0] ? (localImgs[0].startsWith('http') ? localImgs[0] : `https://www.fff.fr${localImgs[0]}`) : '';
+      const awayLogo = localImgs[1] ? (localImgs[1].startsWith('http') ? localImgs[1] : `https://www.fff.fr${localImgs[1]}`) : '';
 
       matches.push({
         homeTeam,
@@ -97,18 +103,18 @@ app.get('/scrape-fff', async (req, res) => {
         awayLogo,
         scoreOrTime,
         status,
-        competition,
         link: fullLink
       });
     });
 
-    // Suppression des doublons
     const uniqueMatches = Array.from(new Set(matches.map(m => m.link)))
       .map(link => matches.find(m => m.link === link));
 
     return res.status(200).json({
       success: true,
-      total: uniqueMatches.length,
+      totalMatches: uniqueMatches.length,
+      totalTeams: uniqueTeams.length,
+      teams: uniqueTeams,
       data: uniqueMatches
     });
 
@@ -122,3 +128,4 @@ app.get('/scrape-fff', async (req, res) => {
 app.listen(PORT, () => {
   console.log(`Scraper Puppeteer + Cheerio démarré sur le port ${PORT}`);
 });
+
