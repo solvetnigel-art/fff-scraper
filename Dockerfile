@@ -1,6 +1,6 @@
 FROM node:20-slim
 
-# Installation des dépendances Chromium pour Puppeteer
+# Installation des dépendances système requises par Chromium / Puppeteer
 RUN apt-get update && apt-get install -y \
     wget \
     gnupg \
@@ -20,6 +20,11 @@ RUN apt-get update && apt-get install -y \
     libxdamage1 \
     libxrandr2 \
     libgbm1 \
+    libcairo2 \
+    libpango-1.0-0 \
+    libpangocairo-1.0-0 \
+    libgdk-pixbuf2.0-0 \
+    libgtk-3-0 \
     fonts-liberation \
     --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
