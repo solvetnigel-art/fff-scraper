@@ -20,7 +20,6 @@ RUN apt-get update && apt-get install -y \
     libxdamage1 \
     libxrandr2 \
     libgbm1 \
-    pnpm \
     fonts-liberation \
     --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
