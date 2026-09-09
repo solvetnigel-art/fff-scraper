@@ -41,7 +41,7 @@ app.get('/scrape-fff', async (req, res) => {
     const matches = [];
     const teams = [];
 
-    // 1. Extraire la liste des équipes du club (colonne de droite sur le site FFF)
+    // 1. Extraire les équipes du club (colonne de droite FFF)
     $('a[href*="/equipe/"]').each((_, element) => {
       const el = $(element);
       const teamName = el.text().trim();
@@ -51,17 +51,16 @@ app.get('/scrape-fff', async (req, res) => {
       if (teamName && link) {
         teams.push({
           name: teamName,
-          logo: logo.startsWith('http') ? logo : `https://www.fff.fr${logo}`,
+          logo: logo ? (logo.startsWith('http') ? logo : `https://www.fff.fr${logo}`) : '',
           url: link.startsWith('http') ? link : `https://www.fff.fr${link}`
         });
       }
     });
 
-    // Dédupliquer les équipes
     const uniqueTeams = Array.from(new Set(teams.map(t => t.url)))
       .map(url => teams.find(t => t.url === url));
 
-    // 2. Extraire la liste des matchs présentés sur la page
+    // 2. Extraire les matchs et les logos des blocs
     $('a[href*="/competition/match/"]').each((_, element) => {
       const el = $(element);
       const link = el.attr('href') || '';
@@ -90,19 +89,23 @@ app.get('/scrape-fff', async (req, res) => {
         status = 'À VENIR';
       }
 
-      const parentBlock = el.closest('div, tr, li, article');
-      const localImgs = parentBlock.find('img').map((_, img) => $(img).attr('src')).get();
+      // Extraction des images de logos proches du match
+      const parentCard = el.closest('div, li, tr, article');
+      const imgs = parentCard.find('img').map((_, img) => $(img).attr('src')).get();
 
-      const homeLogo = localImgs[0] ? (localImgs[0].startsWith('http') ? localImgs[0] : `https://www.fff.fr${localImgs[0]}`) : '';
-      const awayLogo = localImgs[1] ? (localImgs[1].startsWith('http') ? localImgs[1] : `https://www.fff.fr${localImgs[1]}`) : '';
+      const formatLogo = (src) => {
+        if (!src) return '';
+        return src.startsWith('http') ? src : `https://www.fff.fr${src}`;
+      };
 
       matches.push({
         homeTeam,
         awayTeam,
-        homeLogo,
-        awayLogo,
+        homeLogo: formatLogo(imgs[0]),
+        awayLogo: formatLogo(imgs[1]),
         scoreOrTime,
         status,
+        competition: 'Compétition Officielle',
         link: fullLink
       });
     });
@@ -112,8 +115,8 @@ app.get('/scrape-fff', async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      totalMatches: uniqueMatches.length,
       totalTeams: uniqueTeams.length,
+      totalMatches: uniqueMatches.length,
       teams: uniqueTeams,
       data: uniqueMatches
     });
