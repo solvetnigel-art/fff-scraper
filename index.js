@@ -45,11 +45,9 @@ app.get('/scrape-fff', async (req, res) => {
       const link = el.attr('href') || '';
       const rawText = el.text().trim();
 
-      // Formater le lien complet
       const fullLink = link.startsWith('http') ? link : `https://www.fff.fr${link}`;
 
-      // Extraction des noms d'équipes depuis le slug de l'URL
-      // Exemple URL: .../match/56464473-s-c-selestat-a-s-canton-vert
+      // Extraction des noms d'équipes depuis le slug
       const matchSlug = link.split('/match/')[1] || '';
       const slugParts = matchSlug.replace(/^\d+-/, '').split('-');
 
@@ -62,21 +60,49 @@ app.get('/scrape-fff', async (req, res) => {
         awayTeam = slugParts.slice(mid).join(' ').toUpperCase();
       }
 
-      // Formatage du score ou de l'heure à partir du texte
-      let infoMatch = rawText;
+      // Extraction des logos dans l'élément ou ses parents
+      const parentCard = el.closest('div, li, article, tr');
+      const imgs = parentCard.find('img').map((_, img) => $(img).attr('src')).get();
+
+      // Formater URLs de logos (ajouter le domaine si relatif)
+      const formatLogo = (src) => {
+        if (!src) return '';
+        if (src.startsWith('http')) return src;
+        return `https://www.fff.fr${src}`;
+      };
+
+      const homeLogo = formatLogo(imgs[0]);
+      const awayLogo = formatLogo(imgs[1]);
+
+      // Score ou Heure
+      let scoreOrTime = rawText;
+      let status = 'À VENIR';
+
       if (/^\d{2}$/.test(rawText)) {
-        infoMatch = `${rawText[0]} - ${rawText[1]}`; // Transforme "31" en "3 - 1"
+        scoreOrTime = `${rawText[0]} - ${rawText[1]}`;
+        status = 'TERMINÉ';
+      } else if (rawText.includes(':') || rawText.includes('h')) {
+        status = 'À VENIR';
+      } else if (rawText.includes('-')) {
+        status = 'TERMINÉ';
       }
+
+      // Extraction de la compétition si présente à proximité
+      const competition = parentCard.find('[class*="comp"], [class*="category"], .competition').text().trim() || 'Compétition Officielle';
 
       matches.push({
         homeTeam,
         awayTeam,
-        scoreOrTime: infoMatch,
+        homeLogo,
+        awayLogo,
+        scoreOrTime,
+        status,
+        competition,
         link: fullLink
       });
     });
 
-    // Suppression des doublons de liens
+    // Suppression des doublons
     const uniqueMatches = Array.from(new Set(matches.map(m => m.link)))
       .map(link => matches.find(m => m.link === link));
 
