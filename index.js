@@ -1,6 +1,7 @@
 import express from 'express';
 import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+import * as cheerio from 'cheerio';
 
 puppeteer.use(StealthPlugin());
 
@@ -33,10 +34,40 @@ app.get('/scrape-fff', async (req, res) => {
     );
 
     await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
-    const content = await page.content();
-
+    const html = await page.content();
     await browser.close();
-    return res.status(200).send(content);
+
+    // Parsing du HTML avec Cheerio
+    const $ = cheerio.load(html);
+    const matches = [];
+
+    $('.match-link, .ping-match-card, .match-result').each((_, element) => {
+      const match = $(element);
+      
+      const homeTeam = match.find('.home-team, .equipe-domicile, .team-name').first().text().trim();
+      const awayTeam = match.find('.away-team, .equipe-exterieur, .team-name').last().text().trim();
+      const score = match.find('.score, .match-score').text().trim();
+      const date = match.find('.date, .match-date').text().trim();
+      const homeLogo = match.find('img').first().attr('src') || '';
+      const awayLogo = match.find('img').last().attr('src') || '';
+
+      if (homeTeam || awayTeam) {
+        matches.push({
+          homeTeam,
+          awayTeam,
+          score,
+          date,
+          homeLogo,
+          awayLogo
+        });
+      }
+    });
+
+    return res.status(200).json({
+      success: true,
+      total: matches.length,
+      data: matches
+    });
 
   } catch (error) {
     if (browser) await browser.close();
@@ -46,5 +77,5 @@ app.get('/scrape-fff', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`Scraper Puppeteer démarré sur le port ${PORT}`);
+  console.log(`Scraper Puppeteer + Cheerio démarré sur le port ${PORT}`);
 });
