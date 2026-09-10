@@ -1,7 +1,6 @@
 import express from 'express';
 import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
-import * as cheerio from 'cheerio';
 
 puppeteer.use(StealthPlugin());
 
@@ -10,7 +9,6 @@ const PORT = process.env.PORT || 10000;
 
 app.get('/scrape-fff', async (req, res) => {
   const { url } = req.query;
-
   const targetUrl = url || 'https://alsace.fff.fr/recherche-clubs?subtab=agenda&tab=resultats&scl=255';
 
   let browser = null;
@@ -27,75 +25,95 @@ app.get('/scrape-fff', async (req, res) => {
     });
 
     const page = await browser.newPage();
+    await page.setViewport({ width: 1280, height: 900 });
     await page.setUserAgent(
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     );
 
-    // Charger la page racine de la ligue
+    // Charger la page
     await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 40000 });
-    await new Promise((r) => setTimeout(r, 5000));
+    
+    // Attendre 6 secondes que le composant FFF charge son Shadow DOM
+    await new Promise((r) => setTimeout(r, 6000));
 
-    // Récupérer le HTML de la page principale ET de toutes les iFrames injectées
-    const frames = page.frames();
-    let combinedHtml = await page.content();
+    // Déplacer le scroll pour forcer le lazy-loading
+    await page.evaluate(() => window.scrollBy(0, 500));
+    await new Promise((r) => setTimeout(r, 2000));
 
-    for (const frame of frames) {
-      try {
-        const frameHtml = await frame.content();
-        combinedHtml += '\n' + frameHtml;
-      } catch (e) {
-        // Ignorer les frames inaccessibles
+    // Fonction d'extraction traversant le Shadow DOM
+    const data = await page.evaluate(() => {
+      // Traverse récursivement les Shadow Roots
+      function getAllElements(root = document) {
+        let nodes = Array.from(root.querySelectorAll('*'));
+        let shadowNodes = [];
+        for (let node of nodes) {
+          if (node.shadowRoot) {
+            shadowNodes = shadowNodes.concat(getAllElements(node.shadowRoot));
+          }
+        }
+        return nodes.concat(shadowNodes);
       }
-    }
+
+      const allElements = getAllElements();
+      const matchesFound = [];
+
+      // Parcourir tous les liens trouvés même dans le Shadow DOM
+      allElements.forEach(el => {
+        if (el.tagName === 'A' && el.href) {
+          const href = el.href;
+          if (href.includes('match_id=') || href.includes('competition_id=')) {
+            // Remonter au bloc conteneur du match
+            let parent = el.parentElement;
+            let count = 0;
+            while (parent && count < 4) {
+              const txt = parent.innerText ? parent.innerText.replace(/\s+/g, ' ').trim() : '';
+              if (txt.length > 20) {
+                matchesFound.push({
+                  link: href,
+                  content: txt
+                });
+                break;
+              }
+              parent = parent.parentElement;
+              count++;
+            }
+          }
+        }
+      });
+
+      // Extraire l'intégralité du texte rendu visuellement dans tous les Shadow Roots
+      const fullText = allElements
+        .map(el => el.innerText)
+        .filter(Boolean)
+        .join(' ');
+
+      return {
+        matchesFound,
+        fullTextSnippet: fullText.substring(0, 4000)
+      };
+    });
 
     await browser.close();
 
-    // Analyse du HTML combiné avec Cheerio
-    const $ = cheerio.load(combinedHtml);
-    const matches = [];
-
-    // Détecter tous les liens pointant vers des matchs de compétition
-    $('a[href*="match_id="], a[href*="/competitions/"]').each((_, element) => {
-      const el = $(element);
-      const link = el.attr('href') || '';
-      
-      // Remonter au bloc parent du match
-      const parentBlock = el.closest('tr, li, article, div[class*="match"], div');
-      const textBlock = parentBlock.text().replace(/\s+/g, ' ').trim();
-
-      // Extraire les images/logos dans le bloc
-      const imgs = parentBlock.find('img').map((_, img) => {
-        const src = $(img).attr('src') || '';
-        return src.startsWith('http') ? src : `https://alsace.fff.fr${src}`;
-      }).get();
-
-      if (textBlock && textBlock.length > 10) {
-        matches.push({
-          details: textBlock,
-          link: link.startsWith('http') ? link : `https://alsace.fff.fr${link}`,
-          logos: imgs
-        });
-      }
-    });
-
-    // Dédupliquer les matchs selon leur lien
-    const uniqueMatches = Array.from(new Set(matches.map((m) => m.link)))
-      .map((l) => matches.find((m) => m.link === l));
+    // Dédupliquer les résultats par lien
+    const uniqueMatches = Array.from(new Set(data.matchesFound.map(m => m.link)))
+      .map(link => data.matchesFound.find(m => m.link === link));
 
     return res.status(200).json({
       success: true,
       totalMatches: uniqueMatches.length,
-      data: uniqueMatches
+      matches: uniqueMatches,
+      rawShadowTextSample: data.fullTextSnippet
     });
 
   } catch (error) {
     if (browser) await browser.close();
-    console.error('Erreur Scraping iFrame:', error.message);
-    return res.status(500).json({ error: 'Échec du scraping iFrame', details: error.message });
+    console.error('Erreur Deep Shadow DOM:', error.message);
+    return res.status(500).json({ error: 'Échec de l\'extraction Shadow DOM', details: error.message });
   }
 });
 
 app.listen(PORT, () => {
-  console.log(`Scraper Alsace iFrame support démarré sur le port ${PORT}`);
+  console.log(`Scraper Shadow DOM FFF prêt sur le port ${PORT}`);
 });
 
