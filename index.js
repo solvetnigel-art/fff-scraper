@@ -12,6 +12,7 @@ app.get('/scrape-fff', async (req, res) => {
   const targetUrl = url || 'https://alsace.fff.fr/recherche-clubs?subtab=agenda&tab=resultats&scl=255';
 
   let browser = null;
+  let capturedMatches = null;
 
   try {
     browser = await puppeteer.launch({
@@ -30,92 +31,64 @@ app.get('/scrape-fff', async (req, res) => {
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     );
 
-    // 1. Accéder à la page
-    await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 40000 });
-    await new Promise((r) => setTimeout(r, 2000));
-
-    // 2. Cliquer sur le bouton d'acceptation des cookies (RGPD FFF)
-    try {
-      const accepted = await page.evaluate(() => {
-        const buttons = Array.from(document.querySelectorAll('button, a'));
-        const acceptBtn = buttons.find((b) => {
-          const txt = b.innerText ? b.innerText.toLowerCase() : '';
-          return txt.includes('agree and close') || txt.includes('accepter') || txt.includes('continuer sans accepter');
-        });
-        if (acceptBtn) {
-          acceptBtn.click();
-          return true;
-        }
-        return false;
-      });
-      if (accepted) console.log('Bannière de cookies FFF acceptée !');
-    } catch (e) {
-      console.log('Bannière cookies non trouvée ou déjà fermée');
-    }
-
-    // 3. Attendre que le composant charge les matchs après validation des cookies
-    await new Promise((r) => setTimeout(r, 6000));
-    await page.evaluate(() => window.scrollBy(0, 600));
-    await new Promise((r) => setTimeout(r, 2000));
-
-    // 4. Extraire la liste des matchs (Shadow DOM & liens de compétition)
-    const matchesData = await page.evaluate(() => {
-      function getAllElements(root = document) {
-        let nodes = Array.from(root.querySelectorAll('*'));
-        let shadowNodes = [];
-        for (let node of nodes) {
-          if (node.shadowRoot) {
-            shadowNodes = shadowNodes.concat(getAllElements(node.shadowRoot));
-          }
-        }
-        return nodes.concat(shadowNodes);
-      }
-
-      const allElements = getAllElements();
-      const extracted = [];
-
-      allElements.forEach((el) => {
-        if (el.tagName === 'A' && el.href && (el.href.includes('match_id=') || el.href.includes('competition_id='))) {
-          let parent = el.parentElement;
-          let depth = 0;
-          while (parent && depth < 5) {
-            const txt = parent.innerText ? parent.innerText.replace(/\s+/g, ' ').trim() : '';
-            if (txt.length > 20) {
-              extracted.push({
-                matchUrl: el.href,
-                details: txt
-              });
-              break;
+    // Ecouteur réseau : Capture automatique des réponses API contenant les matchs
+    page.on('response', async (response) => {
+      const responseUrl = response.url();
+      if (responseUrl.includes('/api/') || responseUrl.includes('matchs') || responseUrl.includes('agenda')) {
+        try {
+          const contentType = response.headers()['content-type'] || '';
+          if (contentType.includes('application/json')) {
+            const json = await response.json();
+            // Si le JSON contient une liste ou des données de matchs
+            if (json && (Array.isArray(json) || json.items || json.matchs || json.data)) {
+              capturedMatches = json;
+              console.log(' Données JSON des matchs interceptées avec succès !');
             }
-            parent = parent.parentElement;
-            depth++;
           }
+        } catch (e) {
+          // Ignorer les réponses non-JSON
         }
-      });
-
-      return extracted;
+      }
     });
+
+    // Charger la page
+    await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 40000 });
+
+    // Fermer les cookies si présents
+    try {
+      await page.evaluate(() => {
+        const btns = Array.from(document.querySelectorAll('button, a'));
+        const btn = btns.find(b => b.innerText && b.innerText.toLowerCase().includes('close'));
+        if (btn) btn.click();
+      });
+    } catch (e) {}
+
+    // Attendre 6 secondes le chargement des requêtes XHR/Fetch
+    await new Promise((r) => setTimeout(r, 6000));
 
     await browser.close();
 
-    // Nettoyage et déduplication
-    const uniqueMatches = Array.from(new Set(matchesData.map((m) => m.matchUrl)))
-      .map((url) => matchesData.find((m) => m.matchUrl === url));
+    if (capturedMatches) {
+      return res.status(200).json({
+        success: true,
+        method: 'Network Interception',
+        data: capturedMatches
+      });
+    }
 
-    return res.status(200).json({
-      success: true,
-      totalMatches: uniqueMatches.length,
-      matches: uniqueMatches
+    return res.status(404).json({
+      success: false,
+      message: 'Aucun flux JSON de matchs n\'a été capturé durant le chargement.'
     });
 
   } catch (error) {
     if (browser) await browser.close();
-    console.error('Erreur Scraper Cookies/Matches:', error.message);
-    return res.status(500).json({ error: 'Échec du scraping', details: error.message });
+    console.error('Erreur Interception:', error.message);
+    return res.status(500).json({ error: 'Échec de l\'interception réseau', details: error.message });
   }
 });
 
 app.listen(PORT, () => {
-  console.log(`Scraper FFF avec contournement Cookie RGPD prêt sur le port ${PORT}`);
+  console.log(`Scraper par Interception Réseau FFF prêt sur le port ${PORT}`);
 });
 
