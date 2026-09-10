@@ -33,7 +33,12 @@ app.get('/scrape-fff', async (req, res) => {
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     );
 
+    // Attendre que le JS de la ligue charge les matchs dans le DOM
     await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+    
+    // Petite pause de sécurité pour le rendu dynamique
+    await new Promise(r => setTimeout(r, 2000));
+
     const html = await page.content();
     await browser.close();
 
@@ -41,62 +46,45 @@ app.get('/scrape-fff', async (req, res) => {
     const matches = [];
     const teams = [];
 
-    // 1. Extraire les équipes du club (colonne de droite FFF)
-    $('a[href*="/equipe/"]').each((_, element) => {
+    // 1. Extraction des équipes (si présent dans le sous-menu ou la barre latérale)
+    $('a[href*="equipe"], a[href*="scl="]').each((_, element) => {
       const el = $(element);
-      const teamName = el.text().trim();
+      const name = el.text().trim();
       const link = el.attr('href') || '';
       const logo = el.find('img').attr('src') || '';
 
-      if (teamName && link) {
+      if (name && link && name.length < 40) {
         teams.push({
-          name: teamName,
-          logo: logo ? (logo.startsWith('http') ? logo : `https://www.fff.fr${logo}`) : '',
-          url: link.startsWith('http') ? link : `https://www.fff.fr${link}`
+          name,
+          logo: logo ? (logo.startsWith('http') ? logo : `https://alsace.fff.fr${logo}`) : '',
+          url: link.startsWith('http') ? link : `https://alsace.fff.fr${link}`
         });
       }
     });
 
-    const uniqueTeams = Array.from(new Set(teams.map(t => t.url)))
-      .map(url => teams.find(t => t.url === url));
-
-    // 2. Extraire les matchs et les logos des blocs
-    $('a[href*="/competition/match/"]').each((_, element) => {
+    // 2. Extraction des matchs (sélecteurs spécifiques aux ligues régionales FFF)
+    $('a[href*="/match/"], a[href*="/matchs/"], .match-link, .agenda-match').each((_, element) => {
       const el = $(element);
       const link = el.attr('href') || '';
-      const rawText = el.text().trim();
-      const fullLink = link.startsWith('http') ? link : `https://www.fff.fr${link}`;
+      const fullLink = link.startsWith('http') ? link : `https://alsace.fff.fr${link}`;
 
-      const matchSlug = link.split('/match/')[1] || '';
-      const slugParts = matchSlug.replace(/^\d+-/, '').split('-');
+      const parentBlock = el.closest('div, li, tr, article, .match');
+      const textBlock = parentBlock.text().replace(/\s+/g, ' ').trim();
 
-      let homeTeam = 'INCONNU';
-      let awayTeam = 'INCONNU';
-
-      if (slugParts.length >= 2) {
-        const mid = Math.floor(slugParts.length / 2);
-        homeTeam = slugParts.slice(0, mid).join(' ').toUpperCase();
-        awayTeam = slugParts.slice(mid).join(' ').toUpperCase();
-      }
-
-      let scoreOrTime = rawText;
-      let status = 'À VENIR';
-
-      if (/^\d{2}$/.test(rawText)) {
-        scoreOrTime = `${rawText[0]} - ${rawText[1]}`;
-        status = 'TERMINÉ';
-      } else if (rawText.includes(':') || rawText.includes('h')) {
-        status = 'À VENIR';
-      }
-
-      // Extraction des images de logos proches du match
-      const parentCard = el.closest('div, li, tr, article');
-      const imgs = parentCard.find('img').map((_, img) => $(img).attr('src')).get();
-
+      // Extraction des logos dans le bloc du match
+      const imgs = parentBlock.find('img').map((_, img) => $(img).attr('src')).get();
       const formatLogo = (src) => {
         if (!src) return '';
-        return src.startsWith('http') ? src : `https://www.fff.fr${src}`;
+        return src.startsWith('http') ? src : `https://alsace.fff.fr${src}`;
       };
+
+      // Recherche des noms d'équipes et scores/heures
+      const teamsInBlock = parentBlock.find('.club-title, .equipe, .team-name').map((_, t) => $(t).text().trim()).get();
+      
+      let homeTeam = teamsInBlock[0] || 'DOMICILE';
+      let awayTeam = teamsInBlock[1] || 'EXTÉRIEUR';
+      let scoreOrTime = parentBlock.find('.score, .time, .hour').text().trim() || 'À VENIR';
+      let status = scoreOrTime.includes('-') ? 'TERMINÉ' : 'À VENIR';
 
       matches.push({
         homeTeam,
@@ -105,13 +93,14 @@ app.get('/scrape-fff', async (req, res) => {
         awayLogo: formatLogo(imgs[1]),
         scoreOrTime,
         status,
-        competition: 'Compétition Officielle',
+        rawDetails: textBlock,
         link: fullLink
       });
     });
 
-    const uniqueMatches = Array.from(new Set(matches.map(m => m.link)))
-      .map(link => matches.find(m => m.link === link));
+    // Dédupliquer
+    const uniqueTeams = Array.from(new Set(teams.map(t => t.url))).map(u => teams.find(t => t.url === u));
+    const uniqueMatches = Array.from(new Set(matches.map(m => m.link))).map(l => matches.find(m => m.link === l));
 
     return res.status(200).json({
       success: true,
@@ -129,6 +118,5 @@ app.get('/scrape-fff', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`Scraper Puppeteer + Cheerio démarré sur le port ${PORT}`);
+  console.log(`Scraper Alsace FFF démarré sur le port ${PORT}`);
 });
-
