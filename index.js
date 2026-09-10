@@ -32,48 +32,68 @@ app.get('/scrape-fff', async (req, res) => {
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     );
 
-    let apiData = null;
+    await page.goto(url, { waitUntil: 'networkidle2', timeout: 35000 });
+    await new Promise((r) => setTimeout(r, 4000));
 
-    // Écouter les réponses réseau pour intercepter l'API interne FFF
-    page.on('response', async (response) => {
-      const responseUrl = response.url();
-      if (
-        (responseUrl.includes('api') || responseUrl.includes('graphql') || responseUrl.includes('json') || responseUrl.includes('resultats')) &&
-        response.status() === 200
-      ) {
-        try {
-          const contentType = response.headers()['content-type'] || '';
-          if (contentType.includes('application/json')) {
-            const json = await response.json();
-            if (json && (json.data || json.matchs || json.agenda || Array.isArray(json))) {
-              apiData = json;
-            }
+    const result = await page.evaluate(() => {
+      const matches = [];
+      const teams = [];
+
+      function querySelectorAllDeep(selector, root = document) {
+        let elements = Array.from(root.querySelectorAll(selector));
+        const children = Array.from(root.querySelectorAll('*'));
+        for (const child of children) {
+          if (child.shadowRoot) {
+            elements = elements.concat(querySelectorAllDeep(selector, child.shadowRoot));
           }
-        } catch (e) {
-          // Ignorer les flux non-JSON
         }
+        return elements;
       }
+
+      // Extraction des blocs de matchs
+      const cards = querySelectorAllDeep('article, div[class*="match"], li[class*="match"], div[class*="agenda"]');
+      
+      cards.forEach((card) => {
+        const text = card.innerText ? card.innerText.replace(/\s+/g, ' ').trim() : '';
+        const imgs = Array.from(card.querySelectorAll('img')).map((img) => img.src);
+        const linkEl = card.querySelector('a[href*="match"]');
+        const link = linkEl ? linkEl.href : '';
+
+        if (text && text.length > 15 && (text.includes(':') || text.includes('-'))) {
+          matches.push({
+            details: text,
+            logos: imgs,
+            link: link
+          });
+        }
+      });
+
+      // Extraction des équipes
+      const teamLinks = querySelectorAllDeep('a[href*="equipe"], a[href*="scl="]');
+      teamLinks.forEach((a) => {
+        const name = a.innerText.trim();
+        if (name && name.length > 2 && name.length < 50) {
+          teams.push({
+            name: name,
+            url: a.href
+          });
+        }
+      });
+
+      return { matches, teams };
     });
 
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
-    await new Promise((r) => setTimeout(r, 3000));
     await browser.close();
 
-    if (apiData) {
-      return res.status(200).json({
-        success: true,
-        source: 'Intercepted Internal API',
-        rawApiData: apiData
-      });
-    }
+    const uniqueTeams = Array.from(new Set(result.teams.map((t) => t.url)))
+      .map((u) => result.teams.find((t) => t.url === u));
 
     return res.status(200).json({
-      success: false,
-      message: "Aucun flux API interne n'a pu être intercepté sur cette URL.",
-      totalTeams: 0,
-      totalMatches: 0,
-      teams: [],
-      data: []
+      success: true,
+      totalTeams: uniqueTeams.length,
+      totalMatches: result.matches.length,
+      teams: uniqueTeams,
+      data: result.matches
     });
 
   } catch (error) {
@@ -84,5 +104,5 @@ app.get('/scrape-fff', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`Scraper Alsace Network Interceptor démarré sur le port ${PORT}`);
+  console.log(`Scraper Alsace Agenda démarré sur le port ${PORT}`);
 });
