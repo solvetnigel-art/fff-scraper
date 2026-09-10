@@ -1,72 +1,63 @@
 import express from 'express';
+import axios from 'axios';
+import https from 'https';
 
 const app = express();
 const PORT = process.env.PORT || 10000;
 
+// Agent HTTPS qui force la résolution IPv4 et ignore les erreurs SSL strictes
+const agent = new https.Agent({
+  rejectUnauthorized: false,
+  family: 4
+});
+
 app.get('/scrape-fff', async (req, res) => {
   const { url, scl } = req.query;
 
-  // Récupérer le code SCL (ex: 255) soit depuis le paramètre ?scl= soit extrait de l'URL ?url=
   let clubId = scl || '255';
   if (url && url.includes('scl=')) {
     const match = url.match(/scl=(\d+)/);
     if (match) clubId = match[1];
   }
 
-  try {
-    // 1. Appel direct à l'API interne officielle de la FFF
-    const fffApiUrl = `https://api.fff.fr/api/clubs/${clubId}/matchs`;
-    
-    const response = await fetch(fffApiUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'application/json, text/plain, */*',
-        'Origin': 'https://alsace.fff.fr',
-        'Referer': 'https://alsace.fff.fr/'
-      }
-    });
+  const fffEndpoints = [
+    `https://api.fff.fr/api/clubs/${clubId}/matchs`,
+    `https://api.fff.fr/api/clubs/${clubId}/agenda`,
+    `https://api-v2.fff.fr/api/clubs/${clubId}/matchs`
+  ];
 
-    if (!response.ok) {
-      // Tentative de fallback sur l'endpoint agenda alternatif de la FFF
-      const fallbackUrl = `https://api.fff.fr/api/clubs/${clubId}/agenda`;
-      const fallbackRes = await fetch(fallbackUrl, {
+  for (const endpoint of fffEndpoints) {
+    try {
+      const response = await axios.get(endpoint, {
+        httpsAgent: agent,
+        timeout: 10000,
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'application/json, text/plain, */*',
           'Origin': 'https://alsace.fff.fr',
           'Referer': 'https://alsace.fff.fr/'
         }
       });
-      
-      if (!fallbackRes.ok) {
-        return res.status(fallbackRes.status).json({
-          error: `L'API FFF a répondu avec le statut ${fallbackRes.status}`
+
+      if (response.data) {
+        return res.status(200).json({
+          success: true,
+          source: endpoint,
+          clubId,
+          data: response.data
         });
       }
-
-      const fallbackData = await fallbackRes.json();
-      return res.status(200).json({
-        success: true,
-        source: 'API FFF Agenda Direct',
-        clubId,
-        rawApiData: fallbackData
-      });
+    } catch (err) {
+      console.log(`Échec sur l'endpoint ${endpoint} : ${err.message}`);
     }
-
-    const data = await response.json();
-
-    return res.status(200).json({
-      success: true,
-      source: 'API FFF Matchs Direct',
-      clubId,
-      rawApiData: data
-    });
-
-  } catch (error) {
-    console.error('Erreur API FFF Direct:', error.message);
-    return res.status(500).json({ error: 'Échec de la récupération API FFF', details: error.message });
   }
+
+  return res.status(500).json({
+    error: 'Impossible de joindre les endpoints de l\'API FFF',
+    details: 'Toutes les tentatives de connexions ont échoué.'
+  });
 });
 
 app.listen(PORT, () => {
-  console.log(`API Proxy FFF Direct démarrée sur le port ${PORT}`);
+  console.log(`API Proxy FFF Axios démarrée sur le port ${PORT}`);
 });
